@@ -35,7 +35,7 @@ services:
       - "5123:5123"
 
   web:
-    image: ${DOCKERHUB_USERNAME}/stock-analysis-web:latest
+    image: ${DOCKERHUB_USERNAME}/stock-analysis-ui:latest
     build:
       context: ./src/stock-analysis-ui
       dockerfile: Dockerfile

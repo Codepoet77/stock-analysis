@@ -28,7 +28,7 @@ jobs:
         with:
           context: ./src/stock-analysis-ui
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/stock-analysis-web:latest
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/stock-analysis-ui:latest
 
   deploy:
     needs: build-and-push
