@@ -201,7 +201,13 @@ public class LiveSignalEngine : BackgroundService
             .SelectMany(s => s.Rules.Where(r => r.IsActive))
             .ToList();
 
-        if (activeRules.Count == 0) return;
+        if (activeRules.Count == 0)
+        {
+            _logger.LogDebug("Cycle: no active rules found, skipping");
+            return;
+        }
+
+        _logger.LogDebug("Cycle: evaluating {Count} active rules", activeRules.Count);
 
         foreach (var rule in activeRules)
         {
@@ -218,12 +224,18 @@ public class LiveSignalEngine : BackgroundService
     {
         try
         {
+            var ruleLabel = $"{rule.Symbol} {rule.SignalTimeframe} [{rule.Label}]";
+
             // Trading window check (Eastern time)
             if (rule.TradingWindowStart.HasValue && rule.TradingWindowEnd.HasValue)
             {
                 var etNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Eastern).TimeOfDay;
                 if (etNow < rule.TradingWindowStart.Value || etNow >= rule.TradingWindowEnd.Value)
+                {
+                    _logger.LogDebug("Rule {Rule}: outside trading window ({Start}-{End}), current ET={Now}",
+                        ruleLabel, rule.TradingWindowStart.Value, rule.TradingWindowEnd.Value, etNow);
                     return;
+                }
             }
 
             var signalBars  = await GetCachedBarsAsync(rule.Symbol, rule.SignalTimeframe, dataService, ct);
@@ -232,10 +244,19 @@ public class LiveSignalEngine : BackgroundService
             var confirmBars = rule.ConfirmTimeframe.HasValue
                 ? await GetCachedBarsAsync(rule.Symbol, rule.ConfirmTimeframe.Value, dataService, ct) : null;
 
-            if (signalBars.Count < 10) return;
+            if (signalBars.Count < 10)
+            {
+                _logger.LogDebug("Rule {Rule}: insufficient signal bars ({Count} < 10)", ruleLabel, signalBars.Count);
+                return;
+            }
 
             var lookback = GetLookback(rule.SignalTimeframe);
-            if (signalBars.Count < lookback + 2) return;
+            if (signalBars.Count < lookback + 2)
+            {
+                _logger.LogDebug("Rule {Rule}: insufficient bars for lookback ({Count} < {Needed})",
+                    ruleLabel, signalBars.Count, lookback + 2);
+                return;
+            }
 
             var i = signalBars.Count - 1;       // latest bar
             var currentBar = signalBars[i];
@@ -245,12 +266,27 @@ public class LiveSignalEngine : BackgroundService
             // Guard: only apply the override if the 1M cache was updated within the last 2 minutes
             // — if the WebSocket has been down longer, the snapshot is too stale to be useful.
             var liveKey = $"{rule.Symbol}|1M";
+            bool liveOverride = false;
             if (_barCache.TryGetValue(liveKey, out var live1M) && live1M.Bars.Count > 0
                 && DateTime.UtcNow - live1M.FetchedAt < TimeSpan.FromMinutes(2))
+            {
+                var oldClose = currentBar.Close;
                 currentBar = currentBar with { Close = live1M.Bars[^1].Close };
+                liveOverride = true;
+                _logger.LogDebug("Rule {Rule}: live price override {Old:F2} → {New:F2}", ruleLabel, oldClose, currentBar.Close);
+            }
+            else
+            {
+                _logger.LogDebug("Rule {Rule}: no live price override (WS stale or missing), using REST close {Price:F2}",
+                    ruleLabel, currentBar.Close);
+            }
 
             // Kill zone filter
-            if (rule.KillZoneOnly && !IsKillZone(currentBar.Time)) return;
+            if (rule.KillZoneOnly && !IsKillZone(currentBar.Time))
+            {
+                _logger.LogDebug("Rule {Rule}: outside kill zone, skipping", ruleLabel);
+                return;
+            }
 
             var context = signalBars.GetRange(i - lookback, lookback);
             var pdh = context.Max(b => b.High);
@@ -260,6 +296,30 @@ public class LiveSignalEngine : BackgroundService
             var fvgs      = FairValueGapDetector.Detect(context);
             var obs       = OrderBlockDetector.Detect(context);
             var liquidity = LiquidityLevelDetector.Detect(context, pdh, pdl);
+
+            var validObs  = obs.Where(o => o.IsValid).ToList();
+            var openFvgs  = fvgs.Where(f => !f.IsFilled).ToList();
+
+            _logger.LogInformation(
+                "Rule {Rule}: price={Price:F2} bias={Bias} OBs={OBCount} FVGs={FVGCount} livePrice={Live} bar={BarTime:u}",
+                ruleLabel, currentBar.Close, structure.Bias, validObs.Count, openFvgs.Count, liveOverride, currentBar.Time);
+
+            // Log proximity to order blocks
+            foreach (var ob in validObs)
+            {
+                var mid = (ob.Top + ob.Bottom) / 2;
+                var dist = Math.Abs(currentBar.Close - mid) / mid;
+                _logger.LogDebug("Rule {Rule}:   OB {Type} {Top:F2}-{Bottom:F2} mid={Mid:F2} dist={Dist:P3} (need <0.3%)",
+                    ruleLabel, ob.Type, ob.Top, ob.Bottom, mid, dist);
+            }
+
+            // Log proximity to FVGs
+            foreach (var fvg in openFvgs)
+            {
+                var inside = currentBar.Close >= fvg.Bottom && currentBar.Close <= fvg.Top;
+                _logger.LogDebug("Rule {Rule}:   FVG {Type} {Top:F2}-{Bottom:F2} priceInside={Inside}",
+                    ruleLabel, fvg.Type, fvg.Top, fvg.Bottom, inside);
+            }
 
             // Build a BacktestParameters proxy to reuse GenerateSignals logic
             var signalTypes = strategyService.DeserializeSignalTypes(rule.SignalTypesJson);
@@ -276,26 +336,52 @@ public class LiveSignalEngine : BackgroundService
             var biasBias    = biasBars != null ? GetLatestBias(biasBars, currentBar.Time, 30) : null;
             var confirmBias = confirmBars != null ? GetLatestBias(confirmBars, currentBar.Time, 40) : null;
 
+            _logger.LogDebug("Rule {Rule}: htfBias={HtfBias} confirmBias={ConfirmBias} signalTypes={Types}",
+                ruleLabel, biasBias?.ToString() ?? "none", confirmBias?.ToString() ?? "none", rule.SignalTypesJson);
+
             var signals = LiveSignalDetector.GenerateSignals(
-                currentBar, structure, fvgs, obs, liquidity, biasBias, confirmBias, fakeParams);
+                currentBar, structure, fvgs, obs, liquidity, biasBias, confirmBias, fakeParams, _logger);
+
+            if (signals.Count == 0)
+            {
+                _logger.LogDebug("Rule {Rule}: no signals generated this cycle", ruleLabel);
+            }
 
             foreach (var sig in signals)
             {
+                _logger.LogInformation("Rule {Rule}: candidate signal {Type} {Direction} entry={Entry:F2} stop={Stop:F2}",
+                    ruleLabel, sig.Type, sig.Direction, sig.EntryPrice, sig.Stop);
+
                 // Direction filter
-                if (rule.Direction == "Long"  && sig.Direction != SignalDirection.Long)  continue;
-                if (rule.Direction == "Short" && sig.Direction != SignalDirection.Short) continue;
+                if (rule.Direction == "Long"  && sig.Direction != SignalDirection.Long)
+                {
+                    _logger.LogDebug("Rule {Rule}: skipped {Direction} — rule direction filter is Long only", ruleLabel, sig.Direction);
+                    continue;
+                }
+                if (rule.Direction == "Short" && sig.Direction != SignalDirection.Short)
+                {
+                    _logger.LogDebug("Rule {Rule}: skipped {Direction} — rule direction filter is Short only", ruleLabel, sig.Direction);
+                    continue;
+                }
 
                 var cooldownKey = $"{rule.Id}|{sig.Direction}";
                 if (_lastFired.TryGetValue(cooldownKey, out var lastFire) &&
                     DateTime.UtcNow - lastFire < SignalCooldown)
+                {
+                    _logger.LogDebug("Rule {Rule}: skipped {Direction} — cooldown active (last fired {Ago:F0}s ago)",
+                        ruleLabel, sig.Direction, (DateTime.UtcNow - lastFire).TotalSeconds);
                     continue;
+                }
 
                 // Check for existing open signal for this rule+direction
                 if (_openSignals.Values.Any(s =>
                     s.StrategyRuleId == rule.Id &&
                     s.Direction == sig.Direction.ToString() &&
                     s.Status == LiveSignalStatus.Open))
+                {
+                    _logger.LogDebug("Rule {Rule}: skipped {Direction} — already has open signal", ruleLabel, sig.Direction);
                     continue;
+                }
 
                 await FireSignalAsync(rule, sig, strategyService);
                 _lastFired[cooldownKey] = DateTime.UtcNow;
