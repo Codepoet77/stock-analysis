@@ -15,6 +15,6 @@ ENV ASPNETCORE_URLS=http://+:5123
 EXPOSE 5123
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD curl -f http://localhost:5123/health || exit 1
+  CMD wget -qO- http://localhost:5123/health || exit 1
 
 ENTRYPOINT ["dotnet", "StockAnalysis.Api.dll"]
