@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using StockAnalysis.Api.Analysis;
 using StockAnalysis.Api.Data;
@@ -8,6 +9,14 @@ using StockAnalysis.Api.Services;
 using StockAnalysis.Api.Models.Strategy;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// ── Forwarded headers (trust Nginx reverse proxy) ────────────────────────────
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
 
 builder.Services.AddHealthChecks();
 
@@ -96,6 +105,7 @@ using (var scope = app.Services.CreateScope())
     await strategyService.ExpireStaleSignalsAsync(TimeSpan.FromHours(24));
 }
 
+app.UseForwardedHeaders();
 app.UseRouting();
 app.UseCors();
 app.UseAuthentication();
