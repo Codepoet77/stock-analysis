@@ -82,9 +82,12 @@ export default function App() {
       {/* Header */}
       <div className="flex justify-between items-center mb-6">
         <div className="flex items-center gap-8">
-          <div>
-            <h1 className="text-xl font-bold text-slate-100">ICT Analysis</h1>
-            <p className="text-xs text-slate-500 mt-0.5">SPY & QQQ</p>
+          <div className="flex items-center gap-3">
+            <img src="/logo.png" alt="Scout Signal" className="w-9 h-9 rounded-full" />
+            <div>
+              <h1 className="text-xl font-bold text-slate-100">Scout Signal</h1>
+              <p className="text-xs text-slate-500 mt-0.5">Navigate the Market</p>
+            </div>
           </div>
 
           {/* Nav tabs */}
