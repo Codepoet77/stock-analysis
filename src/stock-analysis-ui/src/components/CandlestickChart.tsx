@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import {
   createChart,
   ColorType,
@@ -8,10 +8,20 @@ import {
   LineSeries,
   CandlestickSeries,
 } from 'lightweight-charts';
-import type { AnalysisResult } from '../types/analysis';
+import type { AnalysisResult, Bar } from '../types/analysis';
+
+const API = import.meta.env.VITE_API_URL || '';
 
 interface Props {
   result: AnalysisResult;
+}
+
+interface CandleData {
+  time: UTCTimestamp;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
 }
 
 export function CandlestickChart({ result }: Props) {
@@ -21,9 +31,74 @@ export function CandlestickChart({ result }: Props) {
   const pdhSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const pdlSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
 
+  // Track all loaded candles and fetch state
+  const allCandlesRef = useRef<CandleData[]>([]);
+  const oldestTimeRef = useRef<Date | null>(null);
+  const fetchingRef = useRef(false);
+  const fullyLoadedRef = useRef(false);
+  const initialFitDoneRef = useRef(false);
+
+  const toTs = (iso: string) => Math.floor(new Date(iso).getTime() / 1000) as UTCTimestamp;
+
+  const fetchOlderBars = useCallback(async () => {
+    if (fetchingRef.current || fullyLoadedRef.current || !oldestTimeRef.current) return;
+    fetchingRef.current = true;
+
+    try {
+      const to = oldestTimeRef.current.toISOString();
+      // Fetch 2 hours earlier
+      const from = new Date(oldestTimeRef.current.getTime() - 2 * 60 * 60 * 1000).toISOString();
+
+      const res = await fetch(`${API}/api/analysis/${result.symbol}/bars?from=${from}&to=${to}`);
+      if (!res.ok) return;
+
+      const bars: Bar[] = await res.json();
+      if (bars.length === 0) {
+        fullyLoadedRef.current = true;
+        return;
+      }
+
+      const newCandles: CandleData[] = bars.map(bar => ({
+        time: toTs(bar.time),
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+      }));
+
+      // Filter out duplicates
+      const existingTimes = new Set(allCandlesRef.current.map(c => c.time));
+      const unique = newCandles.filter(c => !existingTimes.has(c.time));
+
+      if (unique.length === 0) {
+        fullyLoadedRef.current = true;
+        return;
+      }
+
+      allCandlesRef.current = [...unique, ...allCandlesRef.current].sort((a, b) => a.time - b.time);
+      oldestTimeRef.current = new Date(allCandlesRef.current[0].time * 1000);
+
+      // Update chart
+      if (candleSeriesRef.current && pdhSeriesRef.current && pdlSeriesRef.current) {
+        const times = allCandlesRef.current.map(c => c.time);
+        candleSeriesRef.current.setData(allCandlesRef.current);
+        pdhSeriesRef.current.setData(times.map(t => ({ time: t, value: result.previousDayHigh })));
+        pdlSeriesRef.current.setData(times.map(t => ({ time: t, value: result.previousDayLow })));
+      }
+    } finally {
+      fetchingRef.current = false;
+    }
+  }, [result.symbol, result.previousDayHigh, result.previousDayLow]);
+
   // Create chart and series once
   useEffect(() => {
     if (!containerRef.current) return;
+
+    // Reset state on mount
+    allCandlesRef.current = [];
+    oldestTimeRef.current = null;
+    fullyLoadedRef.current = false;
+    initialFitDoneRef.current = false;
 
     const chart = createChart(containerRef.current, {
       layout: {
@@ -35,6 +110,20 @@ export function CandlestickChart({ result }: Props) {
         horzLines: { color: '#1e293b' },
       },
       crosshair: { mode: 1 },
+      timeScale: {
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      localization: {
+        timeFormatter: (time: number) => {
+          const d = new Date(time * 1000);
+          return d.toLocaleString('en-US', {
+            month: 'short', day: 'numeric',
+            hour: '2-digit', minute: '2-digit', hour12: false,
+            timeZone: 'America/New_York',
+          });
+        },
+      },
       width: containerRef.current.clientWidth,
       height: 350,
     });
@@ -79,14 +168,28 @@ export function CandlestickChart({ result }: Props) {
     };
   }, []);
 
+  // Detect scroll to left edge
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    const handler = () => {
+      const range = chart.timeScale().getVisibleLogicalRange();
+      if (range && range.from < 5) {
+        fetchOlderBars();
+      }
+    };
+
+    chart.timeScale().subscribeVisibleLogicalRangeChange(handler);
+    return () => chart.timeScale().unsubscribeVisibleLogicalRangeChange(handler);
+  }, [fetchOlderBars]);
+
   // Update data when result changes
   useEffect(() => {
     if (!candleSeriesRef.current || !pdhSeriesRef.current || !pdlSeriesRef.current) return;
     if (result.recentBars.length === 0) return;
 
-    const toTs = (iso: string) => Math.floor(new Date(iso).getTime() / 1000) as UTCTimestamp;
-
-    const candles = result.recentBars.map(bar => ({
+    const newCandles: CandleData[] = result.recentBars.map(bar => ({
       time: toTs(bar.time),
       open: bar.open,
       high: bar.high,
@@ -94,13 +197,29 @@ export function CandlestickChart({ result }: Props) {
       close: bar.close,
     }));
 
-    const times = candles.map(c => c.time);
+    // Merge: new candles overwrite existing ones at the same timestamp
+    const map = new Map<number, CandleData>();
+    for (const c of allCandlesRef.current) map.set(c.time, c);
+    for (const c of newCandles) map.set(c.time, c);
+    const merged = [...map.values()].sort((a, b) => a.time - b.time);
 
-    candleSeriesRef.current.setData(candles);
+    allCandlesRef.current = merged;
+    if (merged.length > 0) {
+      oldestTimeRef.current = new Date(merged[0].time * 1000);
+    }
+
+    const times = merged.map(c => c.time);
+    candleSeriesRef.current.setData(merged);
     pdhSeriesRef.current.setData(times.map(t => ({ time: t, value: result.previousDayHigh })));
     pdlSeriesRef.current.setData(times.map(t => ({ time: t, value: result.previousDayLow })));
 
-    chartRef.current?.timeScale().fitContent();
+    // First load: fit all content. After that: keep view, scroll to latest.
+    if (!initialFitDoneRef.current) {
+      chartRef.current?.timeScale().fitContent();
+      initialFitDoneRef.current = true;
+    } else {
+      chartRef.current?.timeScale().scrollToRealTime();
+    }
   }, [result]);
 
   return <div ref={containerRef} style={{ width: '100%' }} />;

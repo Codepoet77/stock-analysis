@@ -13,16 +13,17 @@ export function useAuth() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`${API}/api/auth/me`, { credentials: 'include' })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        setUser(data ?? null);
-        setLoading(false);
+    fetch(`${API}/api/auth/me`, { credentials: 'include', redirect: 'manual' })
+      .then(async r => {
+        if (r.ok) {
+          const data = await r.json();
+          setUser(data ?? null);
+        } else {
+          setUser(null);
+        }
       })
-      .catch(() => {
-        setUser(null);
-        setLoading(false);
-      });
+      .catch(() => setUser(null))
+      .finally(() => setLoading(false));
   }, []);
 
   const login = useCallback(() => {
