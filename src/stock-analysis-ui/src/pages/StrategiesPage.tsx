@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import type { Strategy, LiveSignal, LiveSignalStatus } from '../types/strategy';
+import type { Strategy, LiveSignal, LiveSignalStatus, AddRuleRequest } from '../types/strategy';
+import { CreateStrategyModal } from '../components/strategy/CreateStrategyModal';
 
 interface Props {
   strategies: Strategy[];
@@ -7,11 +8,13 @@ interface Props {
   onDelete: (strategyId: string) => void;
   onRemoveRule: (ruleId: string) => void;
   onSubscribe: (strategyId: string) => void;
+  onAddToStrategy: (strategyId: string | null, newName: string | null, req: AddRuleRequest) => void;
 }
 
-export function StrategiesPage({ strategies, onToggle, onDelete, onRemoveRule, onSubscribe }: Props) {
+export function StrategiesPage({ strategies, onToggle, onDelete, onRemoveRule, onSubscribe, onAddToStrategy }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   // Subscribe to strategy groups when expanded
   useEffect(() => {
@@ -21,13 +24,19 @@ export function StrategiesPage({ strategies, onToggle, onDelete, onRemoveRule, o
   if (strategies.length === 0) {
     return (
       <div className="max-w-[1400px] mx-auto">
-        <PageHeader />
+        <PageHeader onNew={() => setShowCreateModal(true)} />
         <div className="bg-slate-900 border border-slate-800 rounded-xl px-6 py-16 text-center">
           <p className="text-slate-500 text-sm mb-1">No strategies yet.</p>
           <p className="text-slate-600 text-xs">
-            Run a backtest and click <span className="text-blue-400">+ Strategy</span> on any result row to create one.
+            Click <span className="text-blue-400">New Strategy</span> above or create one from the Backtester results.
           </p>
         </div>
+        {showCreateModal && (
+          <CreateStrategyModal
+            onAdd={(sid, name, req) => { onAddToStrategy(sid, name, req); setShowCreateModal(false); }}
+            onClose={() => setShowCreateModal(false)}
+          />
+        )}
       </div>
     );
   }
@@ -44,7 +53,14 @@ export function StrategiesPage({ strategies, onToggle, onDelete, onRemoveRule, o
 
   return (
     <div className="max-w-[1400px] mx-auto">
-      <PageHeader />
+      <PageHeader onNew={() => setShowCreateModal(true)} />
+
+      {showCreateModal && (
+        <CreateStrategyModal
+          onAdd={(sid, name, req) => { onAddToStrategy(sid, name, req); setShowCreateModal(false); }}
+          onClose={() => setShowCreateModal(false)}
+        />
+      )}
 
       <div className="flex flex-col gap-3">
         {strategies.map(s => {
@@ -240,11 +256,20 @@ function StatusBadge({ status }: { status: LiveSignalStatus }) {
 
 // ── Small helpers ─────────────────────────────────────────────────────────────
 
-function PageHeader() {
+function PageHeader({ onNew }: { onNew: () => void }) {
   return (
-    <div className="mb-6">
-      <h2 className="text-xl font-bold text-slate-100 mb-1">Live Strategies</h2>
-      <p className="text-sm text-slate-500">Active signal detectors running against real-time market data</p>
+    <div className="mb-6 flex justify-between items-center">
+      <div>
+        <h2 className="text-xl font-bold text-slate-100 mb-1">Live Strategies</h2>
+        <p className="text-sm text-slate-500">Active signal detectors running against real-time market data</p>
+      </div>
+      <button
+        onClick={onNew}
+        className="px-4 py-2 rounded-lg text-sm font-semibold text-white bg-blue-700 hover:bg-blue-600
+          active:bg-blue-800 active:scale-95 transition-all duration-150"
+      >
+        New Strategy
+      </button>
     </div>
   );
 }

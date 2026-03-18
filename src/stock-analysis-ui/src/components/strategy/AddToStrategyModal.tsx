@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { BacktestStats, BacktestParameters, EnabledSignalType } from '../../types/backtest';
+import type { BacktestStats, BacktestParameters, EnabledSignalType, ExitStrategy } from '../../types/backtest';
 import type { Strategy, SignalDirection, AddRuleRequest } from '../../types/strategy';
 
 interface Props {
@@ -31,10 +31,16 @@ function fmtWindowKey(ts: string | null | undefined): string {
   return ts.slice(0, 5);
 }
 
+const EXIT_LABELS: Record<ExitStrategy, string> = {
+  TrailingStop: 'Trailing', BreakevenStop: 'BE', FixedR: 'FixedR', NextLiquidity: 'NextLiq', All: 'All',
+};
+const SIGNAL_SHORT: Record<EnabledSignalType, string> = {
+  OBRetest: 'OB', FVGFill: 'FVG', LiquiditySweep: 'Liq', StructureBreak: 'BOS',
+};
+
 export function AddToStrategyModal({ stats, parameters, strategies, onAdd, onClose }: Props) {
-  const [mode, setMode] = useState<'existing' | 'new'>(strategies.length > 0 ? 'existing' : 'new');
+  const [mode, setMode] = useState<'existing' | 'new'>('new');
   const [selectedStrategyId, setSelectedStrategyId] = useState<string>(strategies[0]?.id ?? '');
-  const [newName, setNewName] = useState('');
   const [direction, setDirection] = useState<SignalDirection>('Both');
   const defaultWindow = parameters.sessionFilter === 'OpenKZ'  ? ['09:30', '11:00']
                       : parameters.sessionFilter === 'CloseKZ' ? ['14:00', '16:00']
@@ -49,6 +55,8 @@ export function AddToStrategyModal({ stats, parameters, strategies, onAdd, onClo
 
   const winStart = windowEnabled ? `${windowStart}:00` : null;
   const winEnd   = windowEnabled ? `${windowEnd}:00`   : null;
+
+  const autoName = `${stats.label} · ${stats.symbol} · ${enabledSignalTypes.map(t => SIGNAL_SHORT[t]).join('+')} · ${EXIT_LABELS[stats.exitStrategy as ExitStrategy] ?? stats.exitStrategy}${direction !== 'Both' ? ` · ${direction}` : ''}`;
 
   const selectedStrategy = strategies.find(s => s.id === selectedStrategyId);
   const isDuplicate = mode === 'existing' && selectedStrategy
@@ -71,8 +79,7 @@ export function AddToStrategyModal({ stats, parameters, strategies, onAdd, onClo
     if (mode === 'existing') {
       onAdd(selectedStrategyId, null, req);
     } else {
-      if (!newName.trim()) return;
-      onAdd(null, newName.trim(), req);
+      onAdd(null, autoName, req);
     }
   }
 
@@ -89,13 +96,13 @@ export function AddToStrategyModal({ stats, parameters, strategies, onAdd, onClo
               {stats.label} · {stats.symbol} · {stats.exitStrategy}
             </p>
           </div>
-          <button onClick={onClose} className="text-slate-600 hover:text-slate-300 text-lg leading-none mt-0.5">✕</button>
+          <button onClick={onClose} className="text-slate-600 hover:text-slate-300 text-lg leading-none mt-0.5">&#10005;</button>
         </div>
 
         {/* Mode toggle */}
         {strategies.length > 0 && (
           <div className="flex gap-1 mb-4 bg-slate-800 rounded-lg p-1">
-            {(['existing', 'new'] as const).map(m => (
+            {(['new', 'existing'] as const).map(m => (
               <button
                 key={m}
                 onClick={() => setMode(m)}
@@ -105,6 +112,14 @@ export function AddToStrategyModal({ stats, parameters, strategies, onAdd, onClo
                 {m === 'existing' ? 'Add to Existing' : 'Create New'}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* Auto-generated name (new mode) */}
+        {mode === 'new' && (
+          <div className="mb-4 bg-slate-800 rounded-lg px-3.5 py-2.5">
+            <div className="text-[10px] text-slate-600 uppercase tracking-wide mb-1">Strategy Name</div>
+            <div className="text-sm font-semibold text-slate-100">{autoName}</div>
           </div>
         )}
 
@@ -122,26 +137,11 @@ export function AddToStrategyModal({ stats, parameters, strategies, onAdd, onClo
                 const dup = isDuplicateRule(s, stats.symbol, stats.label, stats.exitStrategy, direction, winStart, winEnd);
                 return (
                   <option key={s.id} value={s.id}>
-                    {dup ? `⚠ ${s.name} (already added)` : s.name}
+                    {dup ? `\u26A0 ${s.name} (already added)` : s.name}
                   </option>
                 );
               })}
             </select>
-          </div>
-        )}
-
-        {/* New strategy name */}
-        {mode === 'new' && (
-          <div className="mb-4">
-            <label className="block text-[11px] text-slate-400 uppercase tracking-wide mb-1.5">Strategy Name</label>
-            <input
-              type="text"
-              value={newName}
-              onChange={e => setNewName(e.target.value)}
-              placeholder="e.g. QQQ 4H Trend"
-              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100
-                placeholder-slate-600 focus:outline-none focus:border-blue-600"
-            />
           </div>
         )}
 
@@ -231,7 +231,7 @@ export function AddToStrategyModal({ stats, parameters, strategies, onAdd, onClo
           </button>
           <button
             onClick={handleSubmit}
-            disabled={isDuplicate || (mode === 'new' && !newName.trim())}
+            disabled={isDuplicate}
             className="px-4 py-1.5 rounded-lg text-xs font-semibold text-white bg-blue-700 hover:bg-blue-600
               disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed transition-colors duration-150"
           >

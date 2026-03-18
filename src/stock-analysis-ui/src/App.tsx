@@ -212,6 +212,7 @@ export default function App() {
           onDelete={deleteStrategy}
           onRemoveRule={removeRule}
           onSubscribe={subscribeToStrategy}
+          onAddToStrategy={handleAddToStrategy}
         />
       )}
     </div>
