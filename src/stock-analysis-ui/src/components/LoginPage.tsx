@@ -6,7 +6,6 @@ export function LoginPage({ onLogin }: Props) {
   return (
     <div className="min-h-screen bg-app flex items-center justify-center">
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center w-80">
-        <img src="/logo.png" alt="Scout Signal" className="w-20 h-20 rounded-full mx-auto mb-4" />
         <h1 className="text-2xl font-bold text-slate-100 mb-2">Scout Signal</h1>
         <p className="text-sm text-slate-500 mb-8">
           Navigate the Market
