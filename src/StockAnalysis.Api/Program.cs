@@ -101,8 +101,7 @@ using (var scope = app.Services.CreateScope())
     var jobService = scope.ServiceProvider.GetRequiredService<BacktestJobService>();
     await jobService.RecoverStaleJobsAsync();
 
-    var strategyService = scope.ServiceProvider.GetRequiredService<StrategyService>();
-    await strategyService.ExpireStaleSignalsAsync(TimeSpan.FromHours(24));
+    // Note: stale signal expiry is handled by LiveSignalEngine AFTER reconciliation
 }
 
 app.UseForwardedHeaders();

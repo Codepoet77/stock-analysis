@@ -140,6 +140,8 @@ public class LiveSignalEngine : BackgroundService
             signal.Symbol, signal.Direction, signal.CurrentStop);
     }
 
+
+
     /// <summary>Same logic as <see cref="UpdateDynamicStop"/> but without the DB write per bar.</summary>
     private static void AdvanceStopInMemory(LiveSignal signal, Bar bar)
     {
