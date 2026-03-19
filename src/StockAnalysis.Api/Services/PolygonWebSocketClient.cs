@@ -58,7 +58,11 @@ public class PolygonWebSocketClient : IAsyncDisposable
             try
             {
                 var result = await _ws.ReceiveAsync(buffer, ct);
-                if (result.MessageType == WebSocketMessageType.Close) break;
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    _logger.LogWarning("WebSocket received close frame");
+                    break;
+                }
 
                 var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
                 ProcessMessage(json);
@@ -66,11 +70,13 @@ public class PolygonWebSocketClient : IAsyncDisposable
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "WebSocket receive error");
+                _logger.LogError(ex, "WebSocket receive error (State={State})", _ws?.State);
                 break;
             }
         }
 
+        _logger.LogWarning("WebSocket receive loop exited (State={State}, Cancelled={Cancelled})",
+            _ws?.State, ct.IsCancellationRequested);
         OnDisconnected?.Invoke();
     }
 
@@ -78,11 +84,27 @@ public class PolygonWebSocketClient : IAsyncDisposable
     {
         try
         {
-            var messages = JsonDocument.Parse(json);
-            foreach (var msg in messages.RootElement.EnumerateArray())
+            var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                _logger.LogDebug("WS non-array message: {Json}", json.Length > 200 ? json[..200] : json);
+                return;
+            }
+
+            foreach (var msg in doc.RootElement.EnumerateArray())
             {
                 if (!msg.TryGetProperty("ev", out var ev)) continue;
-                if (ev.GetString() != "AM") continue;
+                var evType = ev.GetString();
+
+                if (evType == "status")
+                {
+                    var status = msg.TryGetProperty("status", out var s) ? s.GetString() : "?";
+                    var message = msg.TryGetProperty("message", out var m) ? m.GetString() : "";
+                    _logger.LogInformation("WS status: {Status} — {Message}", status, message);
+                    continue;
+                }
+
+                if (evType != "AM") continue;
 
                 var symbol = msg.GetProperty("sym").GetString() ?? "";
                 var bar = new Bar(
@@ -100,7 +122,7 @@ public class PolygonWebSocketClient : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to process WebSocket message");
+            _logger.LogError(ex, "Failed to process WebSocket message: {Json}", json.Length > 200 ? json[..200] : json);
         }
     }
 
