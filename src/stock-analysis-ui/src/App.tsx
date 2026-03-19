@@ -83,7 +83,7 @@ export default function App() {
       <div className="flex justify-between items-center mb-6">
         <div className="flex items-center gap-8">
           <div>
-            <h1 className="text-xl font-bold text-slate-100">Scout Signal</h1>
+            <h1 className="text-xl font-bold text-slate-100">Signal Scout</h1>
             <p className="text-xs text-slate-500 mt-0.5">Navigate the Market</p>
           </div>
 
